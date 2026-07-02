@@ -1,8 +1,8 @@
 /* ================================================================
    STORAGE
-   entries: [{ id, date:'YYYY-MM-DD', hours:number }]
-   salary:  { gross:number, net:number }
-   ptoBank: { initialBalance:number, taken:[{ id, date, hours }] }
+   shifts:  [{ id, startISO, endISO }]
+   salary:  { gross, net }
+   ptoBank: { initialBalance, taken:[{ id, date, hours }] }
    settings:{ ptoRatio, otMultipliers:[], weekendBonusFlat }
 ================================================================ */
 
@@ -12,13 +12,13 @@ function load(key, fallback) {
 }
 function save(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
 
-function getEntries()  { return load('entries',  []); }
-function saveEntries(e){ save('entries', e); }
+function getShifts()   { return load('shifts',  []); }
+function saveShifts(s) { save('shifts', s); }
 
-function getSalary()   { return load('salary',   { gross: 0, net: 0 }); }
+function getSalary()   { return load('salary',  { gross: 0, net: 0 }); }
 function saveSalary(s) { save('salary', s); }
 
-function getPtoBank()  { return load('ptoBank',  { initialBalance: 0, taken: [] }); }
+function getPtoBank()  { return load('ptoBank', { initialBalance: 0, taken: [] }); }
 function savePtoBank(p){ save('ptoBank', p); }
 
 function getSettings() {
@@ -30,113 +30,140 @@ function saveSettings(s){ save('settings', s); }
    DATE HELPERS
 ================================================================ */
 
-function todayKey() {
-  const d = new Date();
-  return localDateKey(d);
-}
-
 function localDateKey(date) {
   const d = new Date(date);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dy = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dy}`;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
-function nextDateKey(dateKey) {
-  const d = new Date(dateKey + 'T00:00:00');
-  d.setDate(d.getDate() + 1);
-  return localDateKey(d);
-}
+function todayKey() { return localDateKey(new Date()); }
 
 function weekStartKey(dateKey) {
   const d = new Date(dateKey + 'T00:00:00');
-  d.setDate(d.getDate() - d.getDay()); // back to Sunday
+  d.setDate(d.getDate() - d.getDay());
   return localDateKey(d);
 }
 
-function weekEndKey(weekStartKey) {
-  const d = new Date(weekStartKey + 'T00:00:00');
+function weekEndKey(startKey) {
+  const d = new Date(startKey + 'T00:00:00');
   d.setDate(d.getDate() + 6);
   return localDateKey(d);
 }
 
-function dayOfWeek(dateKey) {
-  return new Date(dateKey + 'T00:00:00').getDay(); // 0=Sun, 6=Sat
+// Format a date object or dateKey as "Mon, Jun 24"
+function fmtDate(dateOrKey) {
+  const d = typeof dateOrKey === 'string' ? new Date(dateOrKey + 'T00:00:00') : new Date(dateOrKey);
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function isWeekend(dateKey) {
-  const dow = dayOfWeek(dateKey);
-  return dow === 0 || dow === 6;
-}
-
-function fmtDate(dateKey) {
-  return new Date(dateKey + 'T00:00:00').toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric'
-  });
-}
-
+// Format a date for short display: "Jun 24"
 function fmtDateShort(dateKey) {
-  return new Date(dateKey + 'T00:00:00').toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric'
+  return new Date(dateKey + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// Format an ISO string as "Mon, Jun 24, 3:00 PM"
+function fmtDateTime(isoStr) {
+  return new Date(isoStr).toLocaleString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
   });
 }
 
 function fmtHours(h) {
-  if (h == null || isNaN(h)) return '0h';
-  const hrs = Math.floor(Math.abs(h));
+  if (!h || isNaN(h)) return '0h';
+  const hrs  = Math.floor(Math.abs(h));
   const mins = Math.round((Math.abs(h) - hrs) * 60);
   const sign = h < 0 ? '-' : '';
-  if (mins === 0) return `${sign}${hrs}h`;
-  return `${sign}${hrs}h ${mins}m`;
+  return mins === 0 ? `${sign}${hrs}h` : `${sign}${hrs}h ${mins}m`;
 }
 
 function fmtMoney(n) {
   if (!n || isNaN(n)) return '$0.00';
-  return '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Convert a Date to datetime-local string "YYYY-MM-DDTHH:MM"
+function toLocalDTStr(date) {
+  const d = new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+/* ================================================================
+   SHIFT SPLITTING
+   Any shift spanning midnight is split into per-calendar-day
+   segments attributed to the local calendar day they fall in.
+================================================================ */
+
+function splitShiftByDay(shift) {
+  const start = new Date(shift.startISO);
+  const end   = new Date(shift.endISO);
+  const segments = [];
+  let cursor = new Date(start);
+
+  while (cursor < end) {
+    // Next midnight in local time
+    const nextDay = new Date(cursor);
+    nextDay.setDate(nextDay.getDate() + 1);
+    nextDay.setHours(0, 0, 0, 0);
+
+    const segEnd = nextDay <= end ? nextDay : end;
+    const hours  = (segEnd - cursor) / 3600000;
+
+    if (hours > 0.0001) {
+      const dk = localDateKey(cursor);
+      segments.push({
+        dateKey:  dk,
+        hours,
+        dayOfWeek: cursor.getDay(),   // 0=Sun … 6=Sat
+        weekKey:  weekStartKey(dk),
+      });
+    }
+    cursor = nextDay;
+  }
+  return segments;
+}
+
+function getAllSegments(shifts) {
+  return shifts.flatMap(s => splitShiftByDay(s));
 }
 
 /* ================================================================
    WEEK COMPUTATION
-   Returns: { [weekStartKey]: { totalHours, hasWeekend } }
 ================================================================ */
 
-function computeWeeks(entries) {
+function computeWeeks(segments) {
   const weeks = {};
-  for (const e of entries) {
-    const wk = weekStartKey(e.date);
-    if (!weeks[wk]) weeks[wk] = { totalHours: 0, hasWeekend: false };
-    weeks[wk].totalHours += e.hours;
-    if (isWeekend(e.date)) weeks[wk].hasWeekend = true;
+  for (const seg of segments) {
+    if (!weeks[seg.weekKey]) weeks[seg.weekKey] = { totalHours: 0, hasWeekend: false };
+    weeks[seg.weekKey].totalHours += seg.hours;
+    if (seg.dayOfWeek === 0 || seg.dayOfWeek === 6) weeks[seg.weekKey].hasWeekend = true;
   }
   return weeks;
 }
 
 /* ================================================================
-   PERIOD FILTER
+   PERIOD FILTER  (operates on segments, not shifts)
 ================================================================ */
 
-function filterEntriesByPeriod(entries, period) {
-  if (period === 'all') return entries;
+function filterSegmentsByPeriod(segments, period) {
+  if (period === 'all') return segments;
   const now = new Date();
   let startKey;
   if (period === 'week') {
     startKey = weekStartKey(localDateKey(now));
   } else if (period === 'month') {
-    startKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    startKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
   } else if (period === 'year') {
     startKey = `${now.getFullYear()}-01-01`;
   }
-  return entries.filter(e => e.date >= startKey);
+  return segments.filter(s => s.dateKey >= startKey);
 }
 
 /* ================================================================
-   STATS COMPUTATION
+   STATS
 ================================================================ */
 
-function computeHourlyRate(allEntries, salary) {
-  const weeks = computeWeeks(allEntries);
-  const weeksWorked = Object.keys(weeks).length;
+function computeHourlyRate(allSegments, salary) {
+  const weeksWorked = Object.keys(computeWeeks(allSegments)).length;
   if (weeksWorked === 0 || salary.gross === 0) return { gross: 0, net: 0 };
   return {
     gross: salary.gross / weeksWorked / 40,
@@ -144,9 +171,9 @@ function computeHourlyRate(allEntries, salary) {
   };
 }
 
-function computePeriodStats(periodEntries, allEntries, salary, settings) {
-  const weeks      = computeWeeks(periodEntries);
-  const hourlyRate = computeHourlyRate(allEntries, salary);
+function computePeriodStats(periodSegments, allSegments, salary, settings) {
+  const weeks      = computeWeeks(periodSegments);
+  const hourlyRate = computeHourlyRate(allSegments, salary);
   const netRatio   = salary.gross > 0 ? salary.net / salary.gross : 0;
 
   let totalHours = 0, totalOT = 0, totalPTO = 0, weekendWeeks = 0;
@@ -165,20 +192,20 @@ function computePeriodStats(periodEntries, allEntries, salary, settings) {
     if (wk.hasWeekend) weekendWeeks++;
   }
 
-  const weekendFG = {
-    gross: weekendWeeks * settings.weekendBonusFlat,
-    net:   weekendWeeks * settings.weekendBonusFlat * netRatio,
+  return {
+    weeks, totalHours, totalOT, totalPTO, hourlyRate,
+    moneyFG,
+    weekendFG: {
+      gross: weekendWeeks * settings.weekendBonusFlat,
+      net:   weekendWeeks * settings.weekendBonusFlat * netRatio,
+    },
   };
-
-  return { weeks, totalHours, totalOT, totalPTO, moneyFG, weekendFG, hourlyRate };
 }
 
-function computePTOBalance(allEntries, ptoBank, settings) {
-  const weeks = computeWeeks(allEntries);
+function computePTOBalance(allSegments, ptoBank, settings) {
+  const weeks = computeWeeks(allSegments);
   let totalOT = 0;
-  for (const wk of Object.values(weeks)) {
-    totalOT += Math.max(0, wk.totalHours - 40);
-  }
+  for (const wk of Object.values(weeks)) totalOT += Math.max(0, wk.totalHours - 40);
   const earned = totalOT * settings.ptoRatio;
   const taken  = ptoBank.taken.reduce((s, t) => s + t.hours, 0);
   return { earned, taken, balance: ptoBank.initialBalance + earned - taken };
@@ -213,140 +240,185 @@ function showScreen(name) {
 }
 
 function renderScreen(name) {
-  if (name === 'log')       renderLog();
+  if      (name === 'log')       renderShiftList();
   else if (name === 'dashboard') renderDashboard();
-  else if (name === 'pto')      renderPTO();
-  else if (name === 'settings') renderSettings();
+  else if (name === 'pto')       renderPTO();
+  else if (name === 'settings')  renderSettings();
 }
 
 /* ================================================================
    LOG SCREEN
+   _shiftRows: [{ startVal: 'YYYY-MM-DDTHH:MM', endVal: '...' }]
 ================================================================ */
 
-let _dayRows = []; // [{ date, hours }]
+let _shiftRows = [];
 
-function buildDayRowsUI() {
-  const container = document.getElementById('day-rows');
+function defaultStart() {
+  const d = new Date();
+  d.setMinutes(0, 0, 0);
+  return toLocalDTStr(d);
+}
+
+function defaultEnd(startVal) {
+  const d = new Date(startVal);
+  d.setHours(d.getHours() + 8, 0, 0, 0);
+  return toLocalDTStr(d);
+}
+
+function shiftHours(row) {
+  if (!row.startVal || !row.endVal) return 0;
+  const diff = (new Date(row.endVal) - new Date(row.startVal)) / 3600000;
+  return diff > 0 ? diff : 0;
+}
+
+function buildShiftRowsUI() {
+  const container = document.getElementById('shift-rows');
   container.innerHTML = '';
-  _dayRows.forEach((row, i) => {
+
+  _shiftRows.forEach((row, i) => {
+    const h = shiftHours(row);
+    const label = _shiftRows.length > 1 ? `Shift ${i + 1}` : 'Shift';
+
     const div = document.createElement('div');
-    div.className = 'day-row';
+    div.className = 'shift-row';
     div.innerHTML = `
-      <input type="date" value="${row.date}" data-i="${i}" data-field="date" class="row-input">
-      <input type="number" min="0.5" max="24" step="0.5" value="${row.hours}" placeholder="hrs"
-             data-i="${i}" data-field="hours" class="row-input">
-      ${_dayRows.length > 1
-        ? `<button class="day-row-remove" data-remove="${i}" title="Remove day">✕</button>`
-        : '<span style="width:1.5rem"></span>'}
+      <div class="shift-row-header">
+        <span class="shift-row-num">${label}</span>
+        <span class="shift-row-computed">${h > 0 ? fmtHours(h) : '—'}</span>
+        ${_shiftRows.length > 1
+          ? `<button class="shift-row-remove" data-remove="${i}" title="Remove">✕</button>`
+          : ''}
+      </div>
+      <div class="shift-dt-pair">
+        <span class="shift-dt-label">Start</span>
+        <input type="datetime-local" value="${row.startVal}"
+               data-i="${i}" data-field="startVal" class="srow-input">
+      </div>
+      <div class="shift-dt-pair">
+        <span class="shift-dt-label">End</span>
+        <input type="datetime-local" value="${row.endVal}"
+               data-i="${i}" data-field="endVal" class="srow-input">
+      </div>
     `;
     container.appendChild(div);
   });
 
-  container.querySelectorAll('.row-input').forEach(input => {
+  // Bind changes
+  container.querySelectorAll('.srow-input').forEach(input => {
     input.addEventListener('change', e => {
-      const i = +e.target.dataset.i;
+      const i     = +e.target.dataset.i;
       const field = e.target.dataset.field;
-      _dayRows[i][field] = field === 'hours' ? parseFloat(e.target.value) || 0 : e.target.value;
+      _shiftRows[i][field] = e.target.value;
+
+      // Auto-adjust end if start moved past it
+      if (field === 'startVal' && _shiftRows[i].endVal) {
+        const s = new Date(_shiftRows[i].startVal);
+        const en = new Date(_shiftRows[i].endVal);
+        if (en <= s) _shiftRows[i].endVal = defaultEnd(_shiftRows[i].startVal);
+      }
+      buildShiftRowsUI();
     });
   });
 
-  container.querySelectorAll('.day-row-remove').forEach(btn => {
+  // Bind remove buttons
+  container.querySelectorAll('.shift-row-remove').forEach(btn => {
     btn.addEventListener('click', e => {
-      const i = +e.target.dataset.remove;
-      _dayRows.splice(i, 1);
-      buildDayRowsUI();
+      _shiftRows.splice(+e.target.dataset.remove, 1);
+      buildShiftRowsUI();
     });
   });
 }
 
 function initLog() {
-  _dayRows = [{ date: todayKey(), hours: 8 }];
-  buildDayRowsUI();
+  const start = defaultStart();
+  _shiftRows = [{ startVal: start, endVal: defaultEnd(start) }];
+  buildShiftRowsUI();
 
-  document.getElementById('add-day-btn').addEventListener('click', () => {
-    const lastDate = _dayRows[_dayRows.length - 1].date;
-    _dayRows.push({ date: nextDateKey(lastDate), hours: 8 });
-    buildDayRowsUI();
+  document.getElementById('add-shift-btn').addEventListener('click', () => {
+    // New shift starts where the last one ended
+    const lastEnd = _shiftRows[_shiftRows.length - 1].endVal || defaultStart();
+    _shiftRows.push({ startVal: lastEnd, endVal: defaultEnd(lastEnd) });
+    buildShiftRowsUI();
   });
 
-  document.getElementById('save-shift-btn').addEventListener('click', () => {
-    const valid = _dayRows.filter(r => r.date && r.hours > 0);
-    if (valid.length === 0) { showToast('Enter at least one day with hours'); return; }
+  document.getElementById('save-btn').addEventListener('click', () => {
+    const valid = _shiftRows.filter(r => r.startVal && r.endVal && shiftHours(r) > 0);
+    if (valid.length === 0) { showToast('End must be after start'); return; }
 
-    const entries = getEntries();
+    const shifts = getShifts();
     for (const r of valid) {
-      // Merge into existing entry for same date, or add new
-      const existing = entries.find(e => e.date === r.date);
-      if (existing) {
-        existing.hours += r.hours;
-      } else {
-        entries.push({ id: `${r.date}-${Date.now()}`, date: r.date, hours: r.hours });
-      }
+      shifts.push({
+        id:       `${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+        startISO: new Date(r.startVal).toISOString(),
+        endISO:   new Date(r.endVal).toISOString(),
+      });
     }
-    saveEntries(entries);
+    saveShifts(shifts);
 
-    // Reset to single row for today
-    _dayRows = [{ date: todayKey(), hours: 8 }];
-    buildDayRowsUI();
-    renderEntriesList();
-    showToast(valid.length === 1 ? 'Day saved' : `${valid.length} days saved`);
+    // Reset to single blank shift
+    const s = defaultStart();
+    _shiftRows = [{ startVal: s, endVal: defaultEnd(s) }];
+    buildShiftRowsUI();
+    renderShiftList();
+    showToast(valid.length === 1 ? 'Shift saved' : `${valid.length} shifts saved`);
   });
 
-  renderEntriesList();
+  renderShiftList();
 }
 
-function renderEntriesList() {
-  const entries = getEntries();
-  const list = document.getElementById('entries-list');
+function renderShiftList() {
+  const shifts = getShifts();
+  const list   = document.getElementById('entries-list');
 
-  if (entries.length === 0) {
-    list.innerHTML = '<div class="empty">No entries yet. Log your first day above.</div>';
+  if (shifts.length === 0) {
+    list.innerHTML = '<div class="empty">No shifts logged yet.</div>';
     return;
   }
 
-  // Sort descending by date
-  const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date));
+  const sorted = [...shifts].sort((a, b) => b.startISO.localeCompare(a.startISO));
 
-  // Group by month label
   let html = '';
   let lastMonth = '';
 
-  for (const e of sorted.slice(0, 60)) {
-    const d = new Date(e.date + 'T00:00:00');
+  for (const sh of sorted.slice(0, 50)) {
+    const segs  = splitShiftByDay(sh);
+    const total = segs.reduce((s, g) => s + g.hours, 0);
+    const spans = segs.length > 1 ? ` · ${segs.length} days` : '';
+    const d     = new Date(sh.startISO);
     const monthLabel = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
     if (monthLabel !== lastMonth) {
-      if (lastMonth !== '') html += '</div>';
+      if (lastMonth) html += '</div>';
       html += `<div class="entry-group"><div class="entry-group-date">${monthLabel}</div>`;
       lastMonth = monthLabel;
     }
-    const overtime = Math.max(0, e.hours - 8);
+
+    const ot = segs.reduce((s, g) => {
+      // We can't know per-shift OT in isolation; just flag if any day > 8h
+      return s;
+    }, 0);
+
     html += `
       <div class="entry-item">
         <div>
-          <div class="entry-day">${fmtDate(e.date)}</div>
-          <div class="entry-hours">
-            ${fmtHours(e.hours)}
-            ${overtime > 0 ? `<span class="chip chip-accent" style="margin-left:0.4rem">+${fmtHours(overtime)} OT</span>` : ''}
-            ${isWeekend(e.date) ? `<span class="chip chip-success" style="margin-left:0.4rem">Weekend</span>` : ''}
-          </div>
+          <div class="entry-day">${fmtDateTime(sh.startISO)} → ${fmtDateTime(sh.endISO)}</div>
+          <div class="entry-hours">${fmtHours(total)}${spans}</div>
         </div>
-        <button class="btn btn-danger" onclick="deleteEntry('${e.id}')">Delete</button>
-      </div>
-    `;
+        <button class="btn btn-danger" onclick="deleteShift('${sh.id}')">Delete</button>
+      </div>`;
   }
   if (lastMonth) html += '</div>';
-
   list.innerHTML = html;
 }
 
-function deleteEntry(id) {
-  saveEntries(getEntries().filter(e => e.id !== id));
-  renderEntriesList();
-  showToast('Entry deleted');
+function deleteShift(id) {
+  saveShifts(getShifts().filter(s => s.id !== id));
+  renderShiftList();
+  showToast('Shift deleted');
 }
 
 /* ================================================================
-   DASHBOARD SCREEN
+   DASHBOARD
 ================================================================ */
 
 let _dashPeriod = 'week';
@@ -363,12 +435,13 @@ function initDashboard() {
 }
 
 function renderDashboard() {
-  const allEntries = getEntries();
-  const salary     = getSalary();
-  const settings   = getSettings();
-  const periodEntries = filterEntriesByPeriod(allEntries, _dashPeriod);
-  const stats = computePeriodStats(periodEntries, allEntries, salary, settings);
-  const hasRate = salary.gross > 0 && Object.keys(computeWeeks(allEntries)).length > 0;
+  const salary      = getSalary();
+  const settings    = getSettings();
+  const allShifts   = getShifts();
+  const allSegs     = getAllSegments(allShifts);
+  const periodSegs  = filterSegmentsByPeriod(allSegs, _dashPeriod);
+  const stats       = computePeriodStats(periodSegs, allSegs, salary, settings);
+  const hasRate     = salary.gross > 0 && Object.keys(computeWeeks(allSegs)).length > 0;
 
   let multiplierHTML = '';
   for (const m of settings.otMultipliers) {
@@ -394,13 +467,10 @@ function renderDashboard() {
   }
 
   const noMoneyNote = hasRate
-    ? ''
-    : '<div class="empty" style="padding:0.75rem 0">Set salary in Settings to see money figures.</div>';
-
-  const weeksHTML = renderWeekBreakdown(stats.weeks);
+    ? '' : '<div class="empty" style="padding:0.75rem 0">Set salary in Settings to see money figures.</div>';
 
   const hourlyNote = hasRate
-    ? `<div class="stat-sub">Gross ${fmtMoney(stats.hourlyRate.gross)}/hr · Net ${fmtMoney(stats.hourlyRate.net)}/hr</div>`
+    ? `<div class="stat-sub" style="margin-top:0.6rem">Effective rate: gross ${fmtMoney(stats.hourlyRate.gross)}/hr · net ${fmtMoney(stats.hourlyRate.net)}/hr</div>`
     : '';
 
   document.getElementById('dashboard-content').innerHTML = `
@@ -420,21 +490,21 @@ function renderDashboard() {
     </div>
 
     <div class="card">
-      <h2 class="card-heading">Money Foregone (if you were paid OT)</h2>
+      <h2 class="card-heading">Money Foregone (OT pay you didn't receive)</h2>
       ${hasRate ? multiplierHTML : noMoneyNote}
       ${hourlyNote}
     </div>
 
     <div class="card">
       <h2 class="card-heading">By Week</h2>
-      ${weeksHTML}
+      ${renderWeekBreakdown(stats.weeks)}
     </div>
   `;
 }
 
 function renderWeekBreakdown(weeks) {
   const entries = Object.entries(weeks).sort((a, b) => b[0].localeCompare(a[0]));
-  if (entries.length === 0) return '<div class="empty">No entries in this period.</div>';
+  if (entries.length === 0) return '<div class="empty">No shifts in this period.</div>';
 
   return entries.map(([wk, data]) => {
     const ot = Math.max(0, data.totalHours - 40);
@@ -455,10 +525,10 @@ function renderWeekBreakdown(weeks) {
 ================================================================ */
 
 function renderPTO() {
-  const allEntries = getEntries();
-  const ptoBank    = getPtoBank();
-  const settings   = getSettings();
-  const pto = computePTOBalance(allEntries, ptoBank, settings);
+  const allSegs = getAllSegments(getShifts());
+  const ptoBank = getPtoBank();
+  const settings = getSettings();
+  const pto = computePTOBalance(allSegs, ptoBank, settings);
 
   const taken = [...ptoBank.taken].sort((a, b) => b.date.localeCompare(a.date));
   const histHTML = taken.length === 0
@@ -581,7 +651,7 @@ function renderSettings() {
       <h2 class="card-heading">OT Multipliers</h2>
       ${multiplierItems}
       <div class="add-multiplier-row">
-        <input type="number" id="s-new-mult" min="1" max="10" step="0.25" placeholder="e.g. 3×">
+        <input type="number" id="s-new-mult" min="1" max="10" step="0.25" placeholder="e.g. 3">
         <button class="btn btn-ghost btn-sm" onclick="addMultiplier()">+ Add</button>
       </div>
     </div>
@@ -594,27 +664,26 @@ function renderSettings() {
       </div>
       <button class="btn btn-primary mt-1" onclick="saveWeekendBonus()">Save</button>
       <p style="font-size:0.72rem;color:var(--text-muted);margin-top:0.5rem">
-        A weekend = any week where Sat or Sun has logged hours. Counted once per week, not per day.
+        Any week with hours on Sat or Sun counts as one weekend — not per day.
       </p>
     </div>
   `;
 }
 
 function saveSalarySettings() {
-  const gross = parseFloat(document.getElementById('s-gross').value) || 0;
-  const net   = parseFloat(document.getElementById('s-net').value)   || 0;
-  saveSalary({ gross, net });
+  saveSalary({
+    gross: parseFloat(document.getElementById('s-gross').value) || 0,
+    net:   parseFloat(document.getElementById('s-net').value)   || 0,
+  });
   showToast('Salary saved');
 }
 
 function savePTOSettings() {
-  const initial = parseFloat(document.getElementById('s-pto-init').value)  || 0;
-  const ratio   = parseFloat(document.getElementById('s-pto-ratio').value) || 1;
   const bank = getPtoBank();
-  bank.initialBalance = initial;
+  bank.initialBalance = parseFloat(document.getElementById('s-pto-init').value) || 0;
   savePtoBank(bank);
   const s = getSettings();
-  s.ptoRatio = ratio;
+  s.ptoRatio = parseFloat(document.getElementById('s-pto-ratio').value) || 1;
   saveSettings(s);
   showToast('PTO settings saved');
 }
@@ -639,9 +708,8 @@ function removeMultiplier(index) {
 }
 
 function saveWeekendBonus() {
-  const val = parseFloat(document.getElementById('s-wknd').value) || 0;
   const s = getSettings();
-  s.weekendBonusFlat = val;
+  s.weekendBonusFlat = parseFloat(document.getElementById('s-wknd').value) || 0;
   saveSettings(s);
   showToast('Weekend bonus saved');
 }

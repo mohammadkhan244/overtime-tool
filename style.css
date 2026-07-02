@@ -91,31 +91,73 @@ body {
   margin-bottom: 0.9rem;
 }
 
-/* ===== DAY ROWS (log form) ===== */
-.day-row {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
+/* ===== SHIFT ROWS (log form) ===== */
+.shift-row {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.8rem;
   margin-bottom: 0.6rem;
 }
 
-.day-row input[type="date"] { flex: 1.4; }
-.day-row input[type="number"] { flex: 0.8; }
+.shift-row-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
 
-.day-row-remove {
+.shift-row-num {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.shift-row-computed {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 3rem;
+  text-align: right;
+}
+
+.shift-row-remove {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-size: 1.1rem;
+  font-size: 1rem;
   cursor: pointer;
   line-height: 1;
-  padding: 0 0.2rem;
+  padding: 0 0.15rem;
+  margin-left: 0.25rem;
   transition: color 0.15s;
 }
-.day-row-remove:hover { color: var(--accent); }
+.shift-row-remove:hover { color: var(--accent); }
+
+.shift-dt-pair {
+  display: grid;
+  grid-template-columns: 3rem 1fr;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.shift-dt-pair:last-child { margin-bottom: 0; }
+
+.shift-dt-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
 
 /* ===== INPUTS ===== */
 input[type="date"],
+input[type="datetime-local"],
 input[type="number"],
 input[type="text"] {
   width: 100%;
@@ -132,7 +174,8 @@ input[type="text"] {
 
 input:focus { border-color: var(--accent); }
 
-input[type="date"]::-webkit-calendar-picker-indicator {
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   filter: invert(0.6);
   cursor: pointer;
 }
