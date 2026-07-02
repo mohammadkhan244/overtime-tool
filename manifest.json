@@ -1,0 +1,18 @@
+{
+  "name": "Overtime & PTO Tracker",
+  "short_name": "OT Tracker",
+  "description": "Track overtime hours, PTO balance, and money foregone as a salaried employee.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0f0f1a",
+  "theme_color": "#0f0f1a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

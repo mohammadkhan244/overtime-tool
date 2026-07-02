@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f0f1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>OT Tracker</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+
+    <header class="header">
+      <span class="header-icon">⏱</span>
+      <h1 class="header-title">OT Tracker</h1>
+    </header>
+
+    <main class="main">
+
+      <!-- LOG SCREEN -->
+      <section id="screen-log" class="screen active">
+        <div class="card">
+          <h2 class="card-heading">Log Hours</h2>
+          <div id="day-rows"></div>
+          <button class="btn btn-ghost mt-1" id="add-day-btn">+ Add Another Day</button>
+          <button class="btn btn-primary mt-1" id="save-shift-btn">Save</button>
+        </div>
+        <div class="card">
+          <h2 class="card-heading">Recent Entries</h2>
+          <div id="entries-list"></div>
+        </div>
+      </section>
+
+      <!-- DASHBOARD SCREEN -->
+      <section id="screen-dashboard" class="screen">
+        <div class="period-toggle" id="period-toggle">
+          <button class="toggle-btn active" data-period="week">Week</button>
+          <button class="toggle-btn" data-period="month">Month</button>
+          <button class="toggle-btn" data-period="year">Year</button>
+          <button class="toggle-btn" data-period="all">All</button>
+        </div>
+        <div id="dashboard-content"></div>
+      </section>
+
+      <!-- PTO SCREEN -->
+      <section id="screen-pto" class="screen">
+        <div id="pto-content"></div>
+      </section>
+
+      <!-- SETTINGS SCREEN -->
+      <section id="screen-settings" class="screen">
+        <div id="settings-content"></div>
+      </section>
+
+    </main>
+
+    <nav class="bottom-nav">
+      <button class="nav-btn active" data-screen="log">
+        <span class="nav-icon">📝</span>
+        <span class="nav-label">Log</span>
+      </button>
+      <button class="nav-btn" data-screen="dashboard">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">Dashboard</span>
+      </button>
+      <button class="nav-btn" data-screen="pto">
+        <span class="nav-icon">🌴</span>
+        <span class="nav-label">PTO</span>
+      </button>
+      <button class="nav-btn" data-screen="settings">
+        <span class="nav-icon">⚙️</span>
+        <span class="nav-label">Settings</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

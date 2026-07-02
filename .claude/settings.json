@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"c:\\\\Users\\\\moham\\\\OneDrive\\\\Desktop\\\\3.0-Resources\\\\GitHub Websites\\\\overtime-tool\" remote -v)",
+      "Bash(git -C \"c:\\\\Users\\\\moham\\\\OneDrive\\\\Desktop\\\\3.0-Resources\\\\GitHub Websites\\\\overtime-tool\" rev-parse --show-toplevel)"
+    ]
+  }
+}
