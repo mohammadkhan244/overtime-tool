@@ -485,6 +485,38 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0.4; }
 .add-multiplier-row input { flex: 1; }
 .add-multiplier-row .btn { width: auto; flex-shrink: 0; }
 
+/* ===== ERROR BANNER ===== */
+.error-banner {
+  background: rgba(251,191,36,0.09);
+  border-bottom: 1px solid rgba(251,191,36,0.35);
+  padding: 0.6rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.error-banner[hidden] { display: none; }
+
+.error-banner-icon { flex-shrink: 0; font-size: 0.95rem; }
+
+.error-banner-text { flex: 1; line-height: 1.35; }
+
+.error-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--warning);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0.1rem 0.25rem;
+  opacity: 0.65;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.error-banner-dismiss:hover { opacity: 1; }
+
 /* ===== BOTTOM NAV ===== */
 .bottom-nav {
   position: fixed;
