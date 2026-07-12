@@ -157,14 +157,14 @@ body {
 
 .dt-group {
   display: flex;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: 0.35rem;
   flex: 1;
   min-width: 0;
 }
 
 .date-pick-btn {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -173,16 +173,13 @@ body {
   font-size: 0.88rem;
   text-align: left;
   cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   transition: border-color 0.18s;
 }
 
 .date-pick-btn:hover,
 .date-pick-btn:focus { border-color: var(--accent); outline: none; }
 
-input.time-pick-inp { width: 100px; flex-shrink: 0; }
+input.time-pick-inp { width: 100%; }
 
 /* ===== INPUTS ===== */
 input[type="date"],
