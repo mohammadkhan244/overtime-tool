@@ -444,6 +444,131 @@ function shiftHours(row) {
   return diff > 0 ? diff : 0;
 }
 
+/* ================================================================
+   CALENDAR PICKER
+   Date-only popup; time stays as <input type="time">.
+   Internal row values remain 'YYYY-MM-DDTHH:MM' strings throughout.
+================================================================ */
+
+function valToDate(val) { return val ? val.slice(0, 10) : ''; }
+function valToTime(val) { return val ? val.slice(11, 16) : '00:00'; }
+function buildVal(date, time) { return `${date}T${time}`; }
+
+function fmtDateBtn(dateStr) {
+  if (!dateStr) return 'Select date';
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+  });
+}
+
+function maybeAdjustEnd(i) {
+  if (_shiftRows[i].startVal && _shiftRows[i].endVal) {
+    if (new Date(_shiftRows[i].endVal) <= new Date(_shiftRows[i].startVal)) {
+      _shiftRows[i].endVal = defaultEnd(_shiftRows[i].startVal);
+    }
+  }
+}
+
+const _cal = { target: null, year: null, month: null };
+
+function _calEscClose(e) { if (e.key === 'Escape') closeCalendar(); }
+
+function openCalendar(rowIdx, field) {
+  closeCalendar();
+  const cur    = _shiftRows[rowIdx][field];
+  const d      = cur ? new Date(cur) : new Date();
+  _cal.target  = { i: rowIdx, field };
+  _cal.year    = d.getFullYear();
+  _cal.month   = d.getMonth();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'cal-overlay';
+  overlay.id = 'cal-overlay';
+  overlay.innerHTML = '<div class="cal-popup" id="cal-popup"></div>';
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeCalendar(); });
+  document.addEventListener('keydown', _calEscClose);
+  renderCalGrid();
+}
+
+function closeCalendar() {
+  document.getElementById('cal-overlay')?.remove();
+  document.removeEventListener('keydown', _calEscClose);
+  _cal.target = null;
+}
+
+function renderCalGrid() {
+  const popup = document.getElementById('cal-popup');
+  if (!popup || !_cal.target) return;
+
+  const selKey = valToDate(_shiftRows[_cal.target.i][_cal.target.field]);
+  const todKey = localDateKey(new Date());
+
+  const MONTHS = ['January','February','March','April','May','June',
+                  'July','August','September','October','November','December'];
+  const DOWS   = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+
+  const firstDow    = new Date(_cal.year, _cal.month, 1).getDay();
+  const daysInMonth = new Date(_cal.year, _cal.month + 1, 0).getDate();
+  let cells = '';
+
+  // Trailing days from the previous month
+  for (let d = firstDow - 1; d >= 0; d--) {
+    const dt = new Date(_cal.year, _cal.month, -d);
+    cells += `<button class="cal-day cal-other" data-date="${localDateKey(dt)}">${dt.getDate()}</button>`;
+  }
+  // Days of the current month
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dt  = new Date(_cal.year, _cal.month, d);
+    const key = localDateKey(dt);
+    let cls   = 'cal-day';
+    if (key === selKey) cls += ' cal-selected';
+    if (key === todKey) cls += ' cal-today';
+    cells += `<button class="${cls}" data-date="${key}">${d}</button>`;
+  }
+  // Leading days from the next month to fill the last row
+  const used      = firstDow + daysInMonth;
+  const remainder = used % 7 === 0 ? 0 : 7 - (used % 7);
+  for (let d = 1; d <= remainder; d++) {
+    const dt = new Date(_cal.year, _cal.month + 1, d);
+    cells += `<button class="cal-day cal-other" data-date="${localDateKey(dt)}">${d}</button>`;
+  }
+
+  popup.innerHTML = `
+    <div class="cal-header">
+      <button class="cal-nav" id="cal-prev">‹</button>
+      <span class="cal-title">${MONTHS[_cal.month]} ${_cal.year}</span>
+      <button class="cal-nav" id="cal-next">›</button>
+    </div>
+    <div class="cal-dow">${DOWS.map(d => `<span>${d}</span>`).join('')}</div>
+    <div class="cal-grid">${cells}</div>`;
+
+  popup.querySelector('#cal-prev').addEventListener('click', e => {
+    e.stopPropagation();
+    if (--_cal.month < 0) { _cal.month = 11; _cal.year--; }
+    renderCalGrid();
+  });
+  popup.querySelector('#cal-next').addEventListener('click', e => {
+    e.stopPropagation();
+    if (++_cal.month > 11) { _cal.month = 0; _cal.year++; }
+    renderCalGrid();
+  });
+  popup.querySelectorAll('.cal-day').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const { i, field } = _cal.target;
+      _shiftRows[i][field] = buildVal(btn.dataset.date, valToTime(_shiftRows[i][field]));
+      maybeAdjustEnd(i);
+      closeCalendar();
+      buildShiftRowsUI();
+    });
+  });
+}
+
+/* ================================================================
+   LOG SCREEN - shift row builder
+================================================================ */
+
 function buildShiftRowsUI() {
   const container = document.getElementById('shift-rows');
   container.innerHTML = '';
@@ -461,25 +586,36 @@ function buildShiftRowsUI() {
       </div>
       <div class="shift-dt-pair">
         <span class="shift-dt-label">Start</span>
-        <input type="datetime-local" value="${row.startVal}" data-i="${i}" data-field="startVal" class="srow-input">
+        <div class="dt-group">
+          <button class="date-pick-btn" data-i="${i}" data-field="startVal">${fmtDateBtn(valToDate(row.startVal))}</button>
+          <input type="time" class="time-pick-inp" value="${valToTime(row.startVal)}"
+                 data-i="${i}" data-field="startVal">
+        </div>
       </div>
       <div class="shift-dt-pair">
         <span class="shift-dt-label">End</span>
-        <input type="datetime-local" value="${row.endVal}" data-i="${i}" data-field="endVal" class="srow-input">
+        <div class="dt-group">
+          <button class="date-pick-btn" data-i="${i}" data-field="endVal">${fmtDateBtn(valToDate(row.endVal))}</button>
+          <input type="time" class="time-pick-inp" value="${valToTime(row.endVal)}"
+                 data-i="${i}" data-field="endVal">
+        </div>
       </div>`;
     container.appendChild(div);
   });
 
-  container.querySelectorAll('.srow-input').forEach(input => {
+  // Date button → open calendar overlay
+  container.querySelectorAll('.date-pick-btn').forEach(btn => {
+    btn.addEventListener('click', () => openCalendar(+btn.dataset.i, btn.dataset.field));
+  });
+
+  // Time input → update time portion of the stored value
+  container.querySelectorAll('.time-pick-inp').forEach(input => {
     input.addEventListener('change', e => {
       const i     = +e.target.dataset.i;
       const field = e.target.dataset.field;
-      _shiftRows[i][field] = e.target.value;
-      if (field === 'startVal' && _shiftRows[i].endVal) {
-        const s  = new Date(_shiftRows[i].startVal);
-        const en = new Date(_shiftRows[i].endVal);
-        if (en <= s) _shiftRows[i].endVal = defaultEnd(_shiftRows[i].startVal);
-      }
+      const date  = valToDate(_shiftRows[i][field]) || localDateKey(new Date());
+      _shiftRows[i][field] = buildVal(date, e.target.value);
+      maybeAdjustEnd(i);
       buildShiftRowsUI();
     });
   });
