@@ -1,4 +1,4 @@
-const CACHE = 'ot-tracker-v1';
+const CACHE = 'ot-tracker-v2';
 const ASSETS = [
   './',
   './index.html',

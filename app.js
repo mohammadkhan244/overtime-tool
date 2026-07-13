@@ -16,6 +16,10 @@ let _isFirstRun = false;  // true if KV empty AND no local data to migrate
 let _loadError  = null;   // string or null — API failure, not empty state
 let _saveTimer  = null;   // debounce handle for KV writes
 
+let _editingShiftId = null;  // id of shift open in inline edit form
+let _editRows       = [];    // single-element mirror of _shiftRows for edit state
+let _editingPTOId   = null;  // id of PTO entry open in inline edit form
+
 /* ================================================================
    KV API LAYER  — GET to load, POST to save via /api/data
 ================================================================ */
@@ -475,10 +479,10 @@ function fmtDateBtn(dateStr) {
   });
 }
 
-function maybeAdjustEnd(i) {
-  if (_shiftRows[i].startVal && _shiftRows[i].endVal) {
-    if (new Date(_shiftRows[i].endVal) <= new Date(_shiftRows[i].startVal)) {
-      _shiftRows[i].endVal = defaultEnd(_shiftRows[i].startVal);
+function maybeAdjustEnd(i, rows = _shiftRows) {
+  if (rows[i].startVal && rows[i].endVal) {
+    if (new Date(rows[i].endVal) <= new Date(rows[i].startVal)) {
+      rows[i].endVal = defaultEnd(rows[i].startVal);
     }
   }
 }
@@ -487,11 +491,12 @@ const _cal = { target: null, year: null, month: null };
 
 function _calEscClose(e) { if (e.key === 'Escape') closeCalendar(); }
 
-function openCalendar(rowIdx, field) {
+function openCalendar(rowIdx, field, source = 'log') {
   closeCalendar();
-  const cur    = _shiftRows[rowIdx][field];
+  const rows   = source === 'edit' ? _editRows : _shiftRows;
+  const cur    = rows[rowIdx][field];
   const d      = cur ? new Date(cur) : new Date();
-  _cal.target  = { i: rowIdx, field };
+  _cal.target  = { i: rowIdx, field, source };
   _cal.year    = d.getFullYear();
   _cal.month   = d.getMonth();
 
@@ -515,7 +520,8 @@ function renderCalGrid() {
   const popup = document.getElementById('cal-popup');
   if (!popup || !_cal.target) return;
 
-  const selKey = valToDate(_shiftRows[_cal.target.i][_cal.target.field]);
+  const _calRows = _cal.target.source === 'edit' ? _editRows : _shiftRows;
+  const selKey   = valToDate(_calRows[_cal.target.i][_cal.target.field]);
   const todKey = localDateKey(new Date());
 
   const MONTHS = ['January','February','March','April','May','June',
@@ -570,11 +576,13 @@ function renderCalGrid() {
   popup.querySelectorAll('.cal-day').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      const { i, field } = _cal.target;
-      _shiftRows[i][field] = buildVal(btn.dataset.date, valToTime(_shiftRows[i][field]));
-      maybeAdjustEnd(i);
+      const { i, field, source } = _cal.target;
+      const rows = source === 'edit' ? _editRows : _shiftRows;
+      rows[i][field] = buildVal(btn.dataset.date, valToTime(rows[i][field]));
+      maybeAdjustEnd(i, rows);
       closeCalendar();
-      buildShiftRowsUI();
+      if (source === 'edit') renderShiftList();
+      else buildShiftRowsUI();
     });
   });
 }
@@ -700,20 +708,96 @@ function renderShiftList() {
       html += `<div class="entry-group"><div class="entry-group-date">${monthLabel}</div>`;
       lastMonth = monthLabel;
     }
-    html += `
-      <div class="entry-item">
-        <div>
-          <div class="entry-day">${fmtDateTime(sh.startISO)} → ${fmtDateTime(sh.endISO)}</div>
-          <div class="entry-hours">${fmtHours(total)}${spans}</div>
-        </div>
-        <button class="btn btn-danger" onclick="deleteShift('${sh.id}')">Delete</button>
-      </div>`;
+    if (sh.id === _editingShiftId) {
+      const h = shiftHours(_editRows[0]);
+      html += `
+        <div class="entry-item-edit">
+          <div class="shift-row-header">
+            <span class="shift-row-num">Edit Shift</span>
+            <span class="shift-row-computed">${h > 0 ? fmtHours(h) : '—'}</span>
+          </div>
+          <div class="shift-dt-pair">
+            <span class="shift-dt-label">Start</span>
+            <div class="dt-group">
+              <button class="date-pick-btn" onclick="openCalendar(0,'startVal','edit')">${fmtDateBtn(valToDate(_editRows[0].startVal))}</button>
+              <input type="time" class="time-pick-inp edit-time-inp" data-field="startVal" value="${valToTime(_editRows[0].startVal)}">
+            </div>
+          </div>
+          <div class="shift-dt-pair">
+            <span class="shift-dt-label">End</span>
+            <div class="dt-group">
+              <button class="date-pick-btn" onclick="openCalendar(0,'endVal','edit')">${fmtDateBtn(valToDate(_editRows[0].endVal))}</button>
+              <input type="time" class="time-pick-inp edit-time-inp" data-field="endVal" value="${valToTime(_editRows[0].endVal)}">
+            </div>
+          </div>
+          <div class="edit-actions">
+            <button class="btn btn-primary" onclick="saveEditShift()">Save</button>
+            <button class="btn btn-ghost" onclick="cancelEditShift()">Cancel</button>
+          </div>
+        </div>`;
+    } else {
+      html += `
+        <div class="entry-item">
+          <div class="entry-info">
+            <div class="entry-day">${fmtDateTime(sh.startISO)} → ${fmtDateTime(sh.endISO)}</div>
+            <div class="entry-hours">${fmtHours(total)}${spans}</div>
+          </div>
+          <div class="entry-actions">
+            <button class="btn btn-ghost btn-sm" onclick="startEditShift('${sh.id}')">Edit</button>
+            <button class="btn btn-danger" onclick="deleteShift('${sh.id}')">Delete</button>
+          </div>
+        </div>`;
+    }
   }
   if (lastMonth) html += '</div>';
   list.innerHTML = html;
+  list.querySelectorAll('.edit-time-inp').forEach(input => {
+    input.addEventListener('change', e => {
+      const field = e.target.dataset.field;
+      const date  = valToDate(_editRows[0][field]) || localDateKey(new Date());
+      _editRows[0][field] = buildVal(date, e.target.value);
+      maybeAdjustEnd(0, _editRows);
+      renderShiftList();
+    });
+  });
+}
+
+function startEditShift(id) {
+  const sh = getShifts().find(s => s.id === id);
+  if (!sh) return;
+  closeCalendar();
+  _editingShiftId = id;
+  _editRows = [{ startVal: toLocalDTStr(new Date(sh.startISO)), endVal: toLocalDTStr(new Date(sh.endISO)) }];
+  renderShiftList();
+}
+
+function cancelEditShift() {
+  _editingShiftId = null;
+  _editRows = [];
+  closeCalendar();
+  renderShiftList();
+}
+
+function saveEditShift() {
+  const row = _editRows[0];
+  if (!row || !row.startVal || !row.endVal || shiftHours(row) <= 0) {
+    showToast('End must be after start');
+    return;
+  }
+  const shifts = getShifts();
+  const idx = shifts.findIndex(s => s.id === _editingShiftId);
+  if (idx === -1) return;
+  shifts[idx].startISO = new Date(row.startVal).toISOString();
+  shifts[idx].endISO   = new Date(row.endVal).toISOString();
+  saveShifts(shifts);
+  _editingShiftId = null;
+  _editRows = [];
+  renderShiftList();
+  showToast('Shift updated');
 }
 
 function deleteShift(id) {
+  if (_editingShiftId === id) { _editingShiftId = null; _editRows = []; }
   saveShifts(getShifts().filter(s => s.id !== id));
   renderShiftList();
   showToast('Shift deleted');
@@ -829,14 +913,32 @@ function renderPTO() {
   const taken    = [...ptoBank.taken].sort((a, b) => b.date.localeCompare(a.date));
   const histHTML = taken.length === 0
     ? emptyState('No PTO taken yet.')
-    : taken.map(t => `
-        <div class="entry-item" style="margin-bottom:0.3rem">
-          <div>
-            <div class="entry-day">${fmtDate(t.date)}</div>
-            <div class="entry-hours">${fmtHours(t.hours)}</div>
-          </div>
-          <button class="btn btn-danger" onclick="deletePTOTaken('${t.id}')">Delete</button>
-        </div>`).join('');
+    : taken.map(t => {
+        if (t.id === _editingPTOId) {
+          return `
+            <div class="entry-item-edit" style="display:flex;align-items:flex-start;gap:0.5rem;margin-bottom:0.3rem">
+              <div style="flex:1;min-width:0">
+                <input type="date" class="pto-edit-date" value="${t.date}" style="margin-bottom:0.35rem">
+                <input type="number" class="pto-edit-hrs" min="0.5" max="24" step="0.5" value="${t.hours}">
+              </div>
+              <div class="entry-actions">
+                <button class="btn btn-primary btn-sm" onclick="saveEditPTO('${t.id}')">Save</button>
+                <button class="btn btn-ghost btn-sm" onclick="cancelEditPTO()">Cancel</button>
+              </div>
+            </div>`;
+        }
+        return `
+          <div class="entry-item" style="margin-bottom:0.3rem">
+            <div>
+              <div class="entry-day">${fmtDate(t.date)}</div>
+              <div class="entry-hours">${fmtHours(t.hours)}</div>
+            </div>
+            <div class="entry-actions">
+              <button class="btn btn-ghost btn-sm" onclick="startEditPTO('${t.id}')">Edit</button>
+              <button class="btn btn-danger" onclick="deletePTOTaken('${t.id}')">Delete</button>
+            </div>
+          </div>`;
+      }).join('');
 
   document.getElementById('pto-content').innerHTML = `
     <div class="card">
@@ -888,7 +990,36 @@ function renderPTO() {
   });
 }
 
+function startEditPTO(id) {
+  _editingPTOId = id;
+  renderPTO();
+}
+
+function cancelEditPTO() {
+  _editingPTOId = null;
+  renderPTO();
+}
+
+function saveEditPTO(id) {
+  const dateEl = document.querySelector('.pto-edit-date');
+  const hrsEl  = document.querySelector('.pto-edit-hrs');
+  if (!dateEl || !hrsEl) return;
+  const date  = dateEl.value;
+  const hours = parseFloat(hrsEl.value);
+  if (!date || isNaN(hours) || hours <= 0) { showToast('Invalid entry'); return; }
+  const bank  = getPtoBank();
+  const entry = bank.taken.find(t => t.id === id);
+  if (!entry) return;
+  entry.date  = date;
+  entry.hours = hours;
+  savePtoBank(bank);
+  _editingPTOId = null;
+  renderPTO();
+  showToast('PTO entry updated');
+}
+
 function deletePTOTaken(id) {
+  if (_editingPTOId === id) _editingPTOId = null;
   const bank = getPtoBank();
   bank.taken = bank.taken.filter(t => t.id !== id);
   savePtoBank(bank);
