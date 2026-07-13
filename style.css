@@ -747,6 +747,41 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0.4; }
   margin: 0.75rem 0;
 }
 
+/* ===== LOADING SCREEN ===== */
+.loading-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  z-index: 999;
+  gap: 1rem;
+}
+.loading-screen[hidden] { display: none; }
+.loading-text {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+.loading-dots {
+  display: flex;
+  gap: 6px;
+}
+.loading-dots span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ld-bounce 1.2s infinite ease-in-out;
+}
+.loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ld-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40%            { transform: scale(1);   opacity: 1; }
+}
+
 /* ===== DESKTOP ===== */
 @media (min-width: 560px) {
   .stat-grid { grid-template-columns: repeat(3, 1fr); }

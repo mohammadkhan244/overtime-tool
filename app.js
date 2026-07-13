@@ -1,7 +1,7 @@
 /* ================================================================
    STATE
-   All data lives in _data (in-memory cache loaded from IndexedDB).
-   Writes update _data synchronously, then persist to IDB async.
+   _data is the in-memory cache populated from Vercel KV on load.
+   All renders read synchronously from _data; writes debounce to KV.
 ================================================================ */
 
 const _defaults = {
@@ -12,133 +12,147 @@ const _defaults = {
 };
 
 let _data       = JSON.parse(JSON.stringify(_defaults));
-let _db         = null;   // IDBDatabase instance
-let _freshDB    = false;  // true if DB was just created this session
-let _isFirstRun = false;  // true if no data existed anywhere on first open
-let _loadError  = null;   // string or null — read failure, not empty state
+let _isFirstRun = false;  // true if KV empty AND no local data to migrate
+let _loadError  = null;   // string or null — API failure, not empty state
+let _saveTimer  = null;   // debounce handle for KV writes
 
 /* ================================================================
-   INDEXEDDB LAYER
+   KV API LAYER  — GET to load, POST to save via /api/data
 ================================================================ */
 
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open('OTTracker', 1);
-
-    req.onupgradeneeded = e => {
-      if (e.oldVersion === 0) _freshDB = true;
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains('keyval')) {
-        db.createObjectStore('keyval');
-      }
-    };
-
-    req.onsuccess = e => resolve(e.target.result);
-    req.onerror   = e => reject(e.target.error);
-    req.onblocked = () => reject(new Error('IDB open blocked'));
-  });
+// Debounce writes so rapid successive saves (e.g. adding multiple shifts)
+// collapse into one network request after 800 ms of silence.
+function scheduleSave() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(flushSave, 800);
 }
 
-function idbGet(key) {
-  return new Promise((resolve, reject) => {
-    try {
-      const tx  = _db.transaction('keyval', 'readonly');
-      const req = tx.objectStore('keyval').get(key);
-      req.onsuccess = e => resolve(e.target.result);
-      req.onerror   = e => reject(e.target.error);
-    } catch (e) { reject(e); }
-  });
-}
-
-// Returns a Promise — awaitable for import, fire-and-forget for normal saves
-function idbPut(key, val) {
-  if (!_db) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    try {
-      const tx  = _db.transaction('keyval', 'readwrite');
-      const req = tx.objectStore('keyval').put(val, key);
-      req.onsuccess = () => resolve();
-      req.onerror   = e => {
-        console.error(`[OTTracker] IDB write failed for '${key}':`, e.target.error);
-        reject(e.target.error);
-      };
-    } catch (e) { reject(e); }
-  });
-}
-
-/* ================================================================
-   STORAGE INIT  (called once, before any rendering)
-================================================================ */
-
-async function initStorage() {
-  // 1. Request persistent (non-evictable) storage
-  if (navigator.storage?.persist) {
-    try {
-      const granted = await navigator.storage.persist();
-      console.log(`[OTTracker] Persistent storage granted: ${granted}`);
-    } catch (e) {
-      console.warn('[OTTracker] storage.persist() failed:', e);
-    }
-  }
-
-  // 2. Open IndexedDB
+async function flushSave() {
   try {
-    _db = await openDB();
+    const res = await fetch('/api/data', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        shifts:   _data.shifts,
+        salary:   _data.salary,
+        ptoBank:  _data.ptoBank,
+        settings: _data.settings,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } catch (err) {
-    console.error('[OTTracker] Failed to open IndexedDB:', err);
-    _loadError  = 'Could not open storage database — data from this session will not be saved.';
-    _isFirstRun = true; // no prior data accessible
-    return;
-  }
-
-  // 3. Migrate from localStorage if DB is brand new
-  if (_freshDB) {
-    const hadData = migrateFromLocalStorage();
-    if (!hadData) _isFirstRun = true;
-  }
-
-  // 4. Load all keys; distinguish "key absent" (ok) from "read threw" (error)
-  const failedKeys = [];
-  for (const key of Object.keys(_defaults)) {
-    try {
-      const val = await idbGet(key);
-      if (val !== undefined && val !== null) _data[key] = val;
-      // undefined = key not in IDB yet → keep default, not an error
-    } catch (err) {
-      console.error(`[OTTracker] Failed to read '${key}' from IDB:`, err);
-      failedKeys.push(key);
-    }
-  }
-
-  if (failedKeys.length > 0 && !_isFirstRun) {
-    _loadError = `Couldn't load saved data (failed: ${failedKeys.join(', ')}). Some entries may be missing — export a backup from Settings.`;
+    console.error('[OTTracker] Save failed:', err);
+    showToast('⚠ Save failed — check your connection');
   }
 }
 
-// Attempt to port data written by the old localStorage version.
-// Returns true if any localStorage data was found and migrated.
-function migrateFromLocalStorage() {
-  let found = false;
-  for (const key of Object.keys(_defaults)) {
-    try {
-      const raw = localStorage.getItem(key);
-      if (raw !== null) {
-        const parsed = JSON.parse(raw);
-        _data[key] = parsed;
-        idbPut(key, parsed); // async, fire-and-forget
-        found = true;
-      }
-    } catch { /* malformed localStorage entry — skip */ }
+// Called once at startup. Populates _data from KV, or migrates local data.
+async function fetchFromAPI() {
+  try {
+    const res = await fetch('/api/data');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const serverData = await res.json();
+
+    if (serverData && Array.isArray(serverData.shifts)) {
+      // KV has data — use it
+      _data.shifts   = serverData.shifts   ?? _defaults.shifts;
+      _data.salary   = serverData.salary   ?? _defaults.salary;
+      _data.ptoBank  = serverData.ptoBank  ?? _defaults.ptoBank;
+      _data.settings = serverData.settings ?? _defaults.settings;
+    } else {
+      // KV is empty — one-time migration from IDB/localStorage, then push to KV
+      const migrated = await migrateLocalToKV();
+      _isFirstRun = !migrated;
+    }
+  } catch (err) {
+    console.error('[OTTracker] API fetch failed:', err);
+    _loadError  = 'Could not reach server. Check your connection and reload.';
+    _isFirstRun = true;
+    readLocalFallback(); // best-effort: show any cached local data
   }
+}
+
+// One-time migration: IDB → KV, then localStorage → KV.
+// Returns true if any data was found and pushed.
+async function migrateLocalToKV() {
+  let found = false;
+
+  // Prefer IDB (the previous storage engine for this app)
+  try {
+    const idbData = await readFromIDB();
+    if (idbData) { Object.assign(_data, idbData); found = true; }
+  } catch {}
+
+  // Fall back to raw localStorage
+  if (!found) {
+    for (const key of Object.keys(_defaults)) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw !== null) { _data[key] = JSON.parse(raw); found = true; }
+      } catch {}
+    }
+  }
+
   if (found) {
-    Object.keys(_defaults).forEach(k => localStorage.removeItem(k));
-    console.log('[OTTracker] Migrated data from localStorage → IndexedDB');
+    await flushSave(); // push immediately (not debounced)
+    ['shifts','salary','ptoBank','settings'].forEach(k => localStorage.removeItem(k));
+    console.log('[OTTracker] Migrated local data → KV');
   }
   return found;
 }
 
+// Read all four keys from the previous IndexedDB store in one shot.
+function readFromIDB() {
+  return new Promise(resolve => {
+    try {
+      const req = indexedDB.open('OTTracker', 1);
+      req.onupgradeneeded = () => resolve(null); // fresh DB → nothing to migrate
+      req.onerror         = () => resolve(null);
+      req.onsuccess = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('keyval')) { db.close(); resolve(null); return; }
+        const tx    = db.transaction('keyval', 'readonly');
+        const store = tx.objectStore('keyval');
+        const keys  = Object.keys(_defaults);
+        const out   = {};
+        let pending = keys.length, found = false;
+        for (const key of keys) {
+          const r = store.get(key);
+          r.onsuccess = ev => {
+            if (ev.target.result !== undefined) { out[key] = ev.target.result; found = true; }
+            if (--pending === 0) { db.close(); resolve(found ? out : null); }
+          };
+          r.onerror = () => { if (--pending === 0) { db.close(); resolve(found ? out : null); } };
+        }
+      };
+    } catch { resolve(null); }
+  });
+}
+
+// Silent best-effort local read used only when /api/data is unreachable.
+function readLocalFallback() {
+  try {
+    const idbReq = indexedDB.open('OTTracker', 1);
+    idbReq.onsuccess = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('keyval')) return;
+      const tx = db.transaction('keyval', 'readonly');
+      for (const key of Object.keys(_defaults)) {
+        const r = tx.objectStore('keyval').get(key);
+        r.onsuccess = ev => { if (ev.target.result !== undefined) _data[key] = ev.target.result; };
+      }
+    };
+  } catch {}
+  for (const key of Object.keys(_defaults)) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw && _data[key] === _defaults[key]) _data[key] = JSON.parse(raw);
+    } catch {}
+  }
+}
+
 /* ================================================================
-   SYNCHRONOUS GETTERS/SETTERS  (read from cache, write → cache + IDB)
+   SYNCHRONOUS GETTERS/SETTERS  (read from cache, write → cache + KV)
 ================================================================ */
 
 function getShifts()    { return _data.shifts;   }
@@ -146,10 +160,10 @@ function getSalary()    { return _data.salary;   }
 function getPtoBank()   { return _data.ptoBank;  }
 function getSettings()  { return _data.settings; }
 
-function saveShifts(s)  { _data.shifts   = s; idbPut('shifts',   s); }
-function saveSalary(s)  { _data.salary   = s; idbPut('salary',   s); }
-function savePtoBank(p) { _data.ptoBank  = p; idbPut('ptoBank',  p); }
-function saveSettings(s){ _data.settings = s; idbPut('settings', s); }
+function saveShifts(s)  { _data.shifts   = s; scheduleSave(); }
+function saveSalary(s)  { _data.salary   = s; scheduleSave(); }
+function savePtoBank(p) { _data.ptoBank  = p; scheduleSave(); }
+function saveSettings(s){ _data.settings = s; scheduleSave(); }
 
 /* ================================================================
    EXPORT / IMPORT
@@ -193,7 +207,7 @@ function importData() {
       _data.ptoBank  = parsed.ptoBank  ?? _defaults.ptoBank;
       _data.settings = parsed.settings ?? _defaults.settings;
 
-      await Promise.all(Object.keys(_defaults).map(k => idbPut(k, _data[k])));
+      clearTimeout(_saveTimer); await flushSave();
 
       // Clear any prior error state
       _loadError  = null;
@@ -1006,10 +1020,14 @@ function saveWeekendBonus() {
 ================================================================ */
 
 async function init() {
-  // Must complete before any render — loads _data cache from IDB
-  await initStorage();
+  // Populate _data from KV before any render
+  await fetchFromAPI();
 
-  // Show error banner if storage failed or reads errored
+  // Hide loading screen
+  const loading = document.getElementById('loading-screen');
+  if (loading) loading.hidden = true;
+
+  // Show error banner if API failed
   if (_loadError) {
     document.getElementById('error-banner-msg').textContent = `⚠ ${_loadError}`;
     document.getElementById('error-banner').hidden = false;
