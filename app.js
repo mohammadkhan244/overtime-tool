@@ -362,9 +362,10 @@ function filterSegmentsByPeriod(segments, period) {
 
 function filterSegmentsByDashState(segments) {
   if (_dashPeriod === 'all') return segments;
-  if (_dashPeriod === 'ytd') {
-    const startKey = `${new Date().getFullYear()}-01-01`;
-    return segments.filter(s => s.dateKey >= startKey);
+  if (_dashPeriod === 'year') {
+    const start = `${_dashYear}-01-01`;
+    const end   = `${_dashYear + 1}-01-01`;
+    return segments.filter(s => s.dateKey >= start && s.dateKey < end);
   }
   if (_dashPeriod === 'month') {
     const m = _dashMonth, y = _dashYear;
@@ -876,6 +877,19 @@ function renderDashPicker() {
       _dashMonth = +e.target.value; renderDashboard();
     });
     document.getElementById('dash-year-sel').addEventListener('change', e => {
+      _dashYear = +e.target.value; renderDashboard();
+    });
+
+  } else if (_dashPeriod === 'year') {
+    const curY = new Date().getFullYear();
+    let yOpts = '';
+    for (let y = curY - 10; y <= curY + 5; y++)
+      yOpts += `<option value="${y}"${y === _dashYear ? ' selected' : ''}>${y}</option>`;
+    el.innerHTML = `
+      <div class="dash-picker-row">
+        <select id="dash-year-only-sel" class="dash-picker-sel">${yOpts}</select>
+      </div>`;
+    document.getElementById('dash-year-only-sel').addEventListener('change', e => {
       _dashYear = +e.target.value; renderDashboard();
     });
 
