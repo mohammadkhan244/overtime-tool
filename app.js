@@ -360,6 +360,24 @@ function filterSegmentsByPeriod(segments, period) {
   return segments.filter(s => s.dateKey >= startKey);
 }
 
+function filterSegmentsByDashState(segments) {
+  if (_dashPeriod === 'all') return segments;
+  if (_dashPeriod === 'ytd') {
+    const startKey = `${new Date().getFullYear()}-01-01`;
+    return segments.filter(s => s.dateKey >= startKey);
+  }
+  if (_dashPeriod === 'month') {
+    const m = _dashMonth, y = _dashYear;
+    const start = `${y}-${String(m).padStart(2,'0')}-01`;
+    const nm = m === 12 ? 1 : m + 1, ny = m === 12 ? y + 1 : y;
+    const end = `${ny}-${String(nm).padStart(2,'0')}-01`;
+    return segments.filter(s => s.dateKey >= start && s.dateKey < end);
+  }
+  const start = weekStartKey(localDateKey(_dashWeekDate));
+  const end   = weekEndKey(start);
+  return segments.filter(s => s.dateKey >= start && s.dateKey <= end);
+}
+
 /* ================================================================
    STATS
 ================================================================ */
@@ -807,7 +825,10 @@ function deleteShift(id) {
    DASHBOARD
 ================================================================ */
 
-let _dashPeriod = 'week';
+let _dashPeriod   = 'week';
+let _dashWeekDate = new Date();
+let _dashMonth    = new Date().getMonth() + 1;
+let _dashYear     = new Date().getFullYear();
 
 function initDashboard() {
   document.getElementById('period-toggle').addEventListener('click', e => {
@@ -820,11 +841,55 @@ function initDashboard() {
   });
 }
 
+function renderDashPicker() {
+  const el = document.getElementById('dash-picker');
+  if (!el) return;
+
+  if (_dashPeriod === 'week') {
+    const startKey = weekStartKey(localDateKey(_dashWeekDate));
+    const endKey   = weekEndKey(startKey);
+    el.innerHTML = `
+      <div class="dash-picker-row">
+        <input type="date" id="dash-week-inp" class="dash-picker-date" value="${localDateKey(_dashWeekDate)}">
+        <span class="dash-picker-range">${fmtDateShort(startKey)} – ${fmtDateShort(endKey)}</span>
+      </div>`;
+    document.getElementById('dash-week-inp').addEventListener('change', e => {
+      if (!e.target.value) return;
+      _dashWeekDate = new Date(e.target.value + 'T00:00:00');
+      renderDashboard();
+    });
+
+  } else if (_dashPeriod === 'month') {
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const mOpts = MONTHS.map((name, i) =>
+      `<option value="${i+1}"${i+1 === _dashMonth ? ' selected' : ''}>${name}</option>`).join('');
+    const curY = new Date().getFullYear();
+    let yOpts = '';
+    for (let y = curY - 10; y <= curY + 5; y++)
+      yOpts += `<option value="${y}"${y === _dashYear ? ' selected' : ''}>${y}</option>`;
+    el.innerHTML = `
+      <div class="dash-picker-row">
+        <select id="dash-month-sel" class="dash-picker-sel">${mOpts}</select>
+        <select id="dash-year-sel" class="dash-picker-sel">${yOpts}</select>
+      </div>`;
+    document.getElementById('dash-month-sel').addEventListener('change', e => {
+      _dashMonth = +e.target.value; renderDashboard();
+    });
+    document.getElementById('dash-year-sel').addEventListener('change', e => {
+      _dashYear = +e.target.value; renderDashboard();
+    });
+
+  } else {
+    el.innerHTML = '';
+  }
+}
+
 function renderDashboard() {
   const salary     = getSalary();
   const settings   = getSettings();
   const allSegs    = getAllSegments(getShifts());
-  const periodSegs = filterSegmentsByPeriod(allSegs, _dashPeriod);
+  renderDashPicker();
+  const periodSegs = filterSegmentsByDashState(allSegs);
   const stats      = computePeriodStats(periodSegs, allSegs, salary, settings);
   const hasRate    = salary.gross > 0 && Object.keys(computeWeeks(allSegs)).length > 0;
 
